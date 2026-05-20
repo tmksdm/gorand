@@ -4,23 +4,176 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#22c55e" />
-  <title>GoRand — старты для армрестлинга</title>
-
+  <title>GoRand</title>
   <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="icons/icon-192.png" type="image/png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
-
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <main class="screen">
-    <h1>GoRand</h1>
-    <p class="subtitle">Тренировка стартов</p>
 
-    <button id="bigButton" class="big-button">Старт</button>
+  <!-- ============== ГЛАВНЫЙ ЭКРАН ============== -->
+  <section id="screen-main" class="screen">
+    <header class="top-bar">
+      <h1 class="logo">GoRand</h1>
+      <button id="btn-open-settings" class="icon-btn" aria-label="Настройки">
+        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+          <path fill="currentColor" d="M19.14,12.94a7.49,7.49,0,0,0,0-1.88l2.03-1.58a.5.5,0,0,0,.12-.64l-1.92-3.32a.5.5,0,0,0-.61-.22l-2.39.96a7.46,7.46,0,0,0-1.63-.94l-.36-2.54A.5.5,0,0,0,13.88,2H10.12a.5.5,0,0,0-.5.42l-.36,2.54a7.46,7.46,0,0,0-1.63.94l-2.39-.96a.5.5,0,0,0-.61.22L2.71,8.48a.5.5,0,0,0,.12.64l2.03,1.58a7.49,7.49,0,0,0,0,1.88L2.83,14.16a.5.5,0,0,0-.12.64l1.92,3.32a.5.5,0,0,0,.61.22l2.39-.96a7.46,7.46,0,0,0,1.63.94l.36,2.54a.5.5,0,0,0,.5.42h3.76a.5.5,0,0,0,.5-.42l.36-2.54a7.46,7.46,0,0,0,1.63-.94l2.39.96a.5.5,0,0,0,.61-.22l1.92-3.32a.5.5,0,0,0-.12-.64ZM12,15.5A3.5,3.5,0,1,1,15.5,12,3.5,3.5,0,0,1,12,15.5Z"/>
+        </svg>
+      </button>
+    </header>
 
-    <p class="hint">Этап 1: фундамент. Дальше будет настоящая логика.</p>
-  </main>
+    <main class="main-content">
+      <div class="counter">
+        <div class="counter-label">Готов к старту</div>
+        <div class="counter-value">0 / 10</div>
+      </div>
+
+      <button id="btn-start" class="big-btn big-btn--start">Старт</button>
+
+      <div class="timer">00:00.0</div>
+    </main>
+  </section>
+
+
+  <!-- ============== ЭКРАН НАСТРОЕК ============== -->
+  <section id="screen-settings" class="screen hidden">
+    <header class="top-bar">
+      <button id="btn-close-settings" class="icon-btn" aria-label="Назад">
+        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+          <path fill="currentColor" d="M15.41,7.41 14,6 8,12 14,18 15.41,16.59 10.83,12z"/>
+        </svg>
+      </button>
+      <h1 class="logo">Настройки</h1>
+      <span class="icon-btn-placeholder"></span>
+    </header>
+
+    <main class="settings-content">
+
+      <!-- ---------- Секция: Серия ---------- -->
+      <section class="settings-group">
+        <h2 class="settings-group__title">Серия</h2>
+
+        <div class="settings-row">
+          <label class="settings-row__label" for="input-interval-min">
+            Мин. интервал
+            <span class="settings-row__hint">секунды</span>
+          </label>
+          <input
+            id="input-interval-min"
+            class="settings-row__input"
+            type="text"
+            inputmode="decimal"
+            pattern="[0-9]+([.,][0-9]+)?"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-row__label" for="input-interval-max">
+            Макс. интервал
+            <span class="settings-row__hint">секунды</span>
+          </label>
+          <input
+            id="input-interval-max"
+            class="settings-row__input"
+            type="text"
+            inputmode="decimal"
+            pattern="[0-9]+([.,][0-9]+)?"
+            autocomplete="off"
+          />
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-row__label" for="input-starts-count">
+            Кол-во стартов в серии
+          </label>
+          <input
+            id="input-starts-count"
+            class="settings-row__input"
+            type="number"
+            min="1"
+            max="999"
+            step="1"
+            inputmode="numeric"
+          />
+        </div>
+      </section>
+
+      <!-- ---------- Секция: Перед стартом ---------- -->
+      <section class="settings-group">
+        <h2 class="settings-group__title">Перед стартом</h2>
+
+        <div class="settings-row">
+          <label class="settings-row__label" for="toggle-countdown">
+            Обратный отсчёт 3 секунды
+            <span class="settings-row__hint">пауза на изготовку перед серией</span>
+          </label>
+          <label class="switch">
+            <input id="toggle-countdown" type="checkbox" />
+            <span class="switch__slider"></span>
+          </label>
+        </div>
+      </section>
+
+      <!-- ---------- Секция: Звук и вибрация ---------- -->
+      <section class="settings-group">
+        <h2 class="settings-group__title">Звук и вибрация</h2>
+
+        <div class="settings-row">
+          <label class="settings-row__label" for="select-sound-mode">
+            Режим звуков
+          </label>
+          <select id="select-sound-mode" class="settings-row__select">
+            <option value="random-builtin">Случайные из встроенных</option>
+            <option value="random-user">Случайные из моих</option>
+            <option value="random-all">Случайные из всех (микс)</option>
+            <option value="single">Один выбранный</option>
+          </select>
+        </div>
+
+        <!-- Это поле появляется только в режиме "single" — пока всегда видимое,
+             на этапе сохранения настроек научим показывать/прятать. -->
+        <div class="settings-row" id="row-single-sound">
+          <label class="settings-row__label" for="select-single-sound">
+            Выбранный звук
+          </label>
+          <select id="select-single-sound" class="settings-row__select">
+            <option value="">— список появится после загрузки звуков —</option>
+          </select>
+        </div>
+
+        <div class="settings-row">
+          <label class="settings-row__label" for="toggle-vibration">
+            Вибрация
+            <span class="settings-row__hint">короткая вибрация вместе со звуком</span>
+          </label>
+          <label class="switch">
+            <input id="toggle-vibration" type="checkbox" />
+            <span class="switch__slider"></span>
+          </label>
+        </div>
+      </section>
+
+      <!-- ---------- Секция: Мои звуки ---------- -->
+      <section class="settings-group">
+        <h2 class="settings-group__title">Мои звуки</h2>
+
+        <p class="settings-note">
+          Загруженные звуки сохраняются на вашем устройстве и доступны без интернета.
+        </p>
+
+        <button id="btn-upload-sounds" class="btn-secondary" type="button" disabled>
+          Загрузить звуки (Этап 4)
+        </button>
+
+        <ul id="user-sounds-list" class="sounds-list">
+          <li class="sounds-list__empty">Пока ничего не загружено</li>
+        </ul>
+      </section>
+
+    </main>
+  </section>
 
   <script src="app.js"></script>
 </body>
