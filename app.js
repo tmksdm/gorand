@@ -1,5 +1,5 @@
 // === GoRand — основная логика приложения ===
-// Этап 2: переключение экранов + работа с настройками (localStorage).
+// Этап 3: логика серии (старт/стоп, звук, счётчик, таймер).
 
 console.log("GoRand: app.js загружен");
 
@@ -17,30 +17,20 @@ if ("serviceWorker" in navigator) {
 //  НАСТРОЙКИ
 // ============================================================
 
-// Ключ в localStorage, под которым лежат все настройки одним JSON-объектом.
-// Версия в имени — на случай, если в будущем поменяем структуру и нужно будет
-// сбросить старые сохранённые настройки у пользователей.
 const SETTINGS_KEY = "gorand.settings.v1";
 
-// Значения по умолчанию. Используются при первом запуске и как "запасной аэродром"
-// для любого поля, которого вдруг нет в сохранённом объекте.
 const DEFAULT_SETTINGS = {
-  intervalMin: 2.0,         // секунды, с десятыми
-  intervalMax: 4.0,         // секунды, с десятыми
-  startsCount: 10,          // целое
-  countdownEnabled: false,  // обратный отсчёт 3 секунды перед серией
-  soundMode: "random-builtin", // "random-builtin" | "random-user" | "random-all" | "single"
-  singleSoundId: "",        // id выбранного звука для режима "single" (пока пусто)
-  vibrationEnabled: false,  // по ТЗ — по умолчанию ВЫКЛЮЧЕНА
+  intervalMin: 2.0,
+  intervalMax: 4.0,
+  startsCount: 10,
+  countdownEnabled: false,
+  soundMode: "random-builtin",
+  singleSoundId: "",
+  vibrationEnabled: false,
 };
 
-// Текущие настройки в памяти. Заполнятся в loadSettings().
 let settings = { ...DEFAULT_SETTINGS };
 
-/**
- * Читает настройки из localStorage. Если там пусто или мусор — берёт дефолты.
- * Все недостающие поля дозаполняются из DEFAULT_SETTINGS (на случай миграций).
- */
 function loadSettings() {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -57,10 +47,6 @@ function loadSettings() {
   console.log("Настройки загружены:", settings);
 }
 
-/**
- * Сохраняет текущие настройки в localStorage.
- * Вызывается после любого изменения.
- */
 function saveSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -79,13 +65,10 @@ const selectSingleSound = document.getElementById("select-single-sound");
 const rowSingleSound = document.getElementById("row-single-sound");
 const toggleVibration = document.getElementById("toggle-vibration");
 
-// Элемент на главном экране, который показывает "0 / N"
 const counterValue = document.querySelector(".counter-value");
+const counterLabel = document.querySelector(".counter-label");
+const timerEl = document.querySelector(".timer");
 
-/**
- * Расставляет текущие значения settings в поля формы.
- * Вызывается один раз при старте, после loadSettings().
- */
 function renderSettings() {
   inputIntervalMin.value = settings.intervalMin;
   inputIntervalMax.value = settings.intervalMax;
@@ -95,10 +78,7 @@ function renderSettings() {
   selectSingleSound.value = settings.singleSoundId;
   toggleVibration.checked = settings.vibrationEnabled;
 
-  // Строка "Выбранный звук" видна только в режиме single
   updateSingleSoundRowVisibility();
-
-  // Синхронизируем счётчик на главном экране с количеством стартов
   updateMainCounter();
 }
 
@@ -111,21 +91,17 @@ function updateSingleSoundRowVisibility() {
 }
 
 function updateMainCounter() {
-  counterValue.textContent = `0 / ${settings.startsCount}`;
+  if (!isRunning) {
+    counterValue.textContent = `0 / ${settings.startsCount}`;
+  }
 }
 
 // ============================================================
 //  ОБРАБОТЧИКИ ИЗМЕНЕНИЙ ПОЛЕЙ
 // ============================================================
-// Каждый обработчик: 1) читает значение из контрола; 2) обновляет settings;
-// 3) при необходимости валидирует; 4) сохраняет.
 
-// --- Числовые поля ---
-
-// Парсим строку из input в число с плавающей точкой.
-// Если ввели мусор (или пустоту) — возвращаем fallback.
 function parseFloatSafe(str, fallback) {
-  const n = parseFloat(String(str).replace(",", ".")); // принимаем и "2,5" и "2.5"
+  const n = parseFloat(String(str).replace(",", "."));
   return Number.isFinite(n) ? n : fallback;
 }
 
@@ -134,7 +110,6 @@ function parseIntSafe(str, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-// Округляем до десятых, чтобы не возникало 2.3000000004
 function roundTenth(n) {
   return Math.round(n * 10) / 10;
 }
@@ -143,7 +118,6 @@ inputIntervalMin.addEventListener("change", () => {
   let v = roundTenth(parseFloatSafe(inputIntervalMin.value, DEFAULT_SETTINGS.intervalMin));
   if (v < 0.1) v = 0.1;
   if (v > 60) v = 60;
-  // Если мин стал больше макс — подтянем макс
   if (v > settings.intervalMax) {
     settings.intervalMax = v;
     inputIntervalMax.value = v;
@@ -157,7 +131,6 @@ inputIntervalMax.addEventListener("change", () => {
   let v = roundTenth(parseFloatSafe(inputIntervalMax.value, DEFAULT_SETTINGS.intervalMax));
   if (v < 0.1) v = 0.1;
   if (v > 60) v = 60;
-  // Если макс стал меньше мин — подтянем мин
   if (v < settings.intervalMin) {
     settings.intervalMin = v;
     inputIntervalMin.value = v;
@@ -177,8 +150,6 @@ inputStartsCount.addEventListener("change", () => {
   saveSettings();
 });
 
-// --- Тумблеры ---
-
 toggleCountdown.addEventListener("change", () => {
   settings.countdownEnabled = toggleCountdown.checked;
   saveSettings();
@@ -188,8 +159,6 @@ toggleVibration.addEventListener("change", () => {
   settings.vibrationEnabled = toggleVibration.checked;
   saveSettings();
 });
-
-// --- Селекты ---
 
 selectSoundMode.addEventListener("change", () => {
   settings.soundMode = selectSoundMode.value;
@@ -221,20 +190,229 @@ function showScreen(name) {
   }
 }
 
-btnOpenSettings.addEventListener("click", () => showScreen("settings"));
+btnOpenSettings.addEventListener("click", () => {
+  if (isRunning) {
+    console.log("Серия идёт — настройки заблокированы");
+    return;
+  }
+  showScreen("settings");
+});
 btnCloseSettings.addEventListener("click", () => showScreen("main"));
+
+// ============================================================
+//  ЗВУК (Web Audio API)
+// ============================================================
+
+let audioCtx = null;
+
+function ensureAudioContext() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) {
+      console.error("Web Audio API не поддерживается в этом браузере");
+      return null;
+    }
+    audioCtx = new Ctx();
+    console.log("AudioContext создан, state:", audioCtx.state);
+  }
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume().then(() => {
+      console.log("AudioContext разбужен, state:", audioCtx.state);
+    });
+  }
+  return audioCtx;
+}
+
+function playBeep() {
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+
+  const now = ctx.currentTime;
+  const duration = 0.12;
+  const frequency = 880;
+  const peakVolume = 0.4;
+
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.value = frequency;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(peakVolume, now + 0.01);
+  gain.gain.linearRampToValueAtTime(0, now + duration);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start(now);
+  osc.stop(now + duration);
+}
+
+// ============================================================
+//  ТАЙМЕР СЕРИИ
+// ============================================================
+// Показывает общее прошедшее время в формате MM:SS.s.
+// Источник истины — performance.now() (монотонные миллисекунды от загрузки
+// страницы). setInterval отвечает только за частоту перерисовки.
+
+let timerStartedAt = 0;       // момент старта серии (performance.now()), мс
+let timerIntervalId = null;   // id setInterval для перерисовки
+
+/**
+ * Превращает миллисекунды в строку "MM:SS.s".
+ * Math.floor отбрасывает дробную часть, padStart дополняет нулями слева,
+ * чтобы цифры не "прыгали" (всегда 2 знака на минуты, 2 на секунды).
+ */
+function formatTime(ms) {
+  const totalTenths = Math.floor(ms / 100);          // десятые доли секунды всего
+  const tenths = totalTenths % 10;
+  const totalSeconds = Math.floor(totalTenths / 10);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60);
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return `${mm}:${ss}.${tenths}`;
+}
+
+function renderTimer() {
+  const elapsed = performance.now() - timerStartedAt;
+  timerEl.textContent = formatTime(elapsed);
+}
+
+function startTimer() {
+  timerStartedAt = performance.now();
+  renderTimer();                       // сразу показать 00:00.0
+  // 100 мс — частота перерисовки. Это НЕ источник времени, лишь обновление UI.
+  timerIntervalId = setInterval(renderTimer, 100);
+}
+
+function stopTimer() {
+  if (timerIntervalId !== null) {
+    clearInterval(timerIntervalId);
+    timerIntervalId = null;
+  }
+  // Финальную перерисовку делаем — чтобы зафиксировать точное время остановки.
+  renderTimer();
+}
+
+function resetTimer() {
+  // Используется при нажатии "Стоп" вручную — сбрасываем на 00:00.0.
+  if (timerIntervalId !== null) {
+    clearInterval(timerIntervalId);
+    timerIntervalId = null;
+  }
+  timerEl.textContent = "00:00.0";
+}
+
+// ============================================================
+//  ЛОГИКА СЕРИИ (Этап 3)
+// ============================================================
+
+let isRunning = false;
+let nextBeepTimeoutId = null;
+let currentStart = 0;
+
+const btnStart = document.getElementById("btn-start");
+
+function renderStartButton() {
+  if (isRunning) {
+    btnStart.textContent = "Стоп";
+    btnStart.classList.remove("big-btn--start");
+    btnStart.classList.add("big-btn--stop");
+  } else {
+    btnStart.textContent = "Старт";
+    btnStart.classList.remove("big-btn--stop");
+    btnStart.classList.add("big-btn--start");
+  }
+}
+
+function randomInterval() {
+  const min = settings.intervalMin;
+  const max = settings.intervalMax;
+  const raw = min + Math.random() * (max - min);
+  return roundTenth(raw);
+}
+
+function scheduleNextBeep() {
+  const delaySec = randomInterval();
+  const delayMs = Math.round(delaySec * 1000);
+  console.log(`⏱ следующий бип через ${delaySec.toFixed(1)} с`);
+
+  nextBeepTimeoutId = setTimeout(() => {
+    nextBeepTimeoutId = null;
+    if (!isRunning) return;
+
+    playBeep();
+    currentStart += 1;
+    counterValue.textContent = `${currentStart} / ${settings.startsCount}`;
+    console.log(`🔔 старт ${currentStart} / ${settings.startsCount}`);
+
+    if (currentStart >= settings.startsCount) {
+      finishSeries();
+    } else {
+      scheduleNextBeep();
+    }
+  }, delayMs);
+}
+
+function startSeries() {
+  if (isRunning) return;
+  console.log("▶ Старт серии. Настройки:", settings);
+
+  ensureAudioContext();
+
+  isRunning = true;
+  currentStart = 0;
+  counterLabel.textContent = "Серия идёт";
+  counterValue.textContent = `0 / ${settings.startsCount}`;
+  renderStartButton();
+
+  startTimer();
+  scheduleNextBeep();
+}
+
+function stopSeries() {
+  if (!isRunning) return;
+  console.log("■ Стоп серии (вручную)");
+
+  isRunning = false;
+
+  if (nextBeepTimeoutId !== null) {
+    clearTimeout(nextBeepTimeoutId);
+    nextBeepTimeoutId = null;
+  }
+
+  resetTimer();   // сбрасываем на 00:00.0 — серия не считается выполненной
+
+  currentStart = 0;
+  counterLabel.textContent = "Готов к старту";
+  renderStartButton();
+  updateMainCounter();
+}
+
+function finishSeries() {
+  console.log("✅ Серия завершена");
+  isRunning = false;
+  nextBeepTimeoutId = null;
+
+  stopTimer();    // оставляем финальное время на экране — пусть видно "за сколько прошёл"
+
+  counterLabel.textContent = "Серия завершена";
+  renderStartButton();
+}
+
+btnStart.addEventListener("click", () => {
+  if (isRunning) {
+    stopSeries();
+  } else {
+    startSeries();
+  }
+});
 
 // ============================================================
 //  ИНИЦИАЛИЗАЦИЯ
 // ============================================================
 
-// Сначала читаем настройки, потом расставляем их в поля.
 loadSettings();
 renderSettings();
-
-// --- Большая кнопка "Старт" (заглушка до Этапа 3) ---
-const btnStart = document.getElementById("btn-start");
-btnStart.addEventListener("click", () => {
-  console.log("Кнопка Старт нажата (логика появится на Этапе 3)");
-  console.log("Текущие настройки:", settings);
-});
+renderStartButton();
