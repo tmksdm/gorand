@@ -607,3 +607,60 @@ body {
 .sounds-list {
   margin-top: 16px;
 }
+
+/* ============================================================
+   Сворачиваемые группы в списке звуков (Этап 4 шаг 5 — доработка)
+   ============================================================ */
+
+/* Заголовок группы — кликабельный, выглядит как строка с шевроном. */
+.sounds-list__group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--subtle);
+  cursor: pointer;
+  user-select: none;
+  min-height: 40px;
+}
+.sounds-list__group-header:first-child {
+  border-top: none;
+}
+
+/* Шеврон ▸ / ▾. Поворачиваем CSS-ом, чтобы анимировался плавно. */
+.sounds-list__chevron {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  transition: transform 0.15s;
+}
+.sounds-list__group-header[aria-expanded="true"] .sounds-list__chevron {
+  transform: rotate(90deg);
+}
+
+.sounds-list__group-title {
+  flex: 1;
+}
+
+.sounds-list__group-count {
+  color: var(--subtle);
+  font-weight: 600;
+}
+
+/* Если группа свёрнута — её строки скрываются (display:none переопределит flex). */
+.sounds-list__item.is-collapsed {
+  display: none;
+}
+
+/* Когда у пользовательской группы 0 элементов — показываем плейсхолдер
+   меньшим текстом, без рамок. */
+.sounds-list__placeholder {
+  font-size: 0.85rem;
+  color: var(--subtle);
+  padding: 8px 0 12px;
+}

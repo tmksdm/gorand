@@ -503,27 +503,38 @@ inputUploadSounds.addEventListener("change", async (event) => {
 // ============================================================
 
 /**
- * Сортирует записи: сначала builtin (по name естественной сортировкой),
- * потом user (по addedAt: свежие сверху).
+ * Сортирует записи отдельно по группам.
+ * Возвращает объект { user: [...], builtin: [...] } — UI сам решит,
+ * в каком порядке их показать.
+ *  - user: свежие сверху (по addedAt)
+ *  - builtin: «естественная» сортировка по имени (Го 02 < Го 10)
  */
 function sortSoundsForList(records) {
-  const builtin = records
-    .filter((r) => r.source === "builtin")
-    .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
   const user = records
     .filter((r) => r.source === "user")
     .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-  return [...builtin, ...user];
+  const builtin = records
+    .filter((r) => r.source === "builtin")
+    .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
+  return { user, builtin };
 }
 
 // Текущая «играющая» запись в списке — чтобы можно было визуально подсветить
 // кнопку ▶ и не запускать второй экземпляр одновременно.
 let currentlyPreviewingId = null;
 
-function renderSoundsList(records) {
+// Состояние «свёрнуто / развёрнуто» по группам.
+// По умолчанию: пользовательские раскрыты, встроенные свёрнуты.
+const groupCollapsed = {
+  user: false,
+  builtin: true,
+};
+
+function renderSoundsList(grouped) {
   userSoundsListEl.innerHTML = "";
 
-  if (records.length === 0) {
+  const totalCount = grouped.user.length + grouped.builtin.length;
+  if (totalCount === 0) {
     const empty = document.createElement("li");
     empty.className = "sounds-list__empty";
     empty.textContent = "Пока ничего не загружено";
@@ -531,53 +542,138 @@ function renderSoundsList(records) {
     return;
   }
 
-  for (const rec of records) {
-    const li = document.createElement("li");
-    li.className = "sounds-list__item";
-    li.dataset.soundId = rec.id;
-
-    // ▶ Прослушать
-    const btnPlay = document.createElement("button");
-    btnPlay.type = "button";
-    btnPlay.className = "sounds-list__btn";
-    btnPlay.setAttribute("aria-label", "Прослушать");
-    btnPlay.textContent = "▶";
-    if (currentlyPreviewingId === rec.id) {
-      btnPlay.classList.add("sounds-list__btn--playing");
+  // --- Группа «Мои» (всегда сверху) ---
+  renderGroupHeader({
+    key: "user",
+    title: "Мои",
+    count: grouped.user.length,
+  });
+  if (grouped.user.length === 0) {
+    const placeholder = document.createElement("li");
+    placeholder.className = "sounds-list__placeholder";
+    placeholder.dataset.groupItem = "user";
+    placeholder.textContent = "Пока ничего не загружено. Нажмите «Загрузить звуки» выше.";
+    if (groupCollapsed.user) placeholder.classList.add("is-collapsed");
+    userSoundsListEl.appendChild(placeholder);
+  } else {
+    for (const rec of grouped.user) {
+      userSoundsListEl.appendChild(renderSoundItem(rec, "user"));
     }
-    btnPlay.addEventListener("click", () => previewSound(rec.id));
+  }
 
-    // Имя
-    const nameEl = document.createElement("span");
-    nameEl.className = "sounds-list__name";
-    nameEl.textContent = rec.name;
-    nameEl.title = rec.name;
-
-    // Бейдж
-    const badge = document.createElement("span");
-    badge.className =
-      "sounds-list__badge" +
-      (rec.source === "user" ? " sounds-list__badge--user" : "");
-    badge.textContent = rec.source === "user" ? "мой" : "встроенный";
-
-    li.appendChild(btnPlay);
-    li.appendChild(nameEl);
-    li.appendChild(badge);
-
-    // ✕ Удалить — только для user
-    if (rec.source === "user") {
-      const btnDel = document.createElement("button");
-      btnDel.type = "button";
-      btnDel.className = "sounds-list__btn sounds-list__btn--delete";
-      btnDel.setAttribute("aria-label", "Удалить");
-      btnDel.textContent = "✕";
-      btnDel.addEventListener("click", () => deleteUserSound(rec.id, rec.name));
-      li.appendChild(btnDel);
-    }
-
-    userSoundsListEl.appendChild(li);
+  // --- Группа «Встроенные» ---
+  renderGroupHeader({
+    key: "builtin",
+    title: "Встроенные",
+    count: grouped.builtin.length,
+  });
+  for (const rec of grouped.builtin) {
+    userSoundsListEl.appendChild(renderSoundItem(rec, "builtin"));
   }
 }
+
+/**
+ * Рисует заголовок группы и сразу подвешивает к нему обработчик клика.
+ * key — "user" | "builtin" (нужен для запоминания состояния).
+ */
+function renderGroupHeader({ key, title, count }) {
+  const header = document.createElement("li");
+  header.className = "sounds-list__group-header";
+  header.setAttribute("role", "button");
+  header.setAttribute("aria-expanded", String(!groupCollapsed[key]));
+  header.dataset.groupHeader = key;
+
+  const chev = document.createElement("span");
+  chev.className = "sounds-list__chevron";
+  chev.textContent = "▸";
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "sounds-list__group-title";
+  titleEl.textContent = title;
+
+  const countEl = document.createElement("span");
+  countEl.className = "sounds-list__group-count";
+  countEl.textContent = String(count);
+
+  header.appendChild(chev);
+  header.appendChild(titleEl);
+  header.appendChild(countEl);
+
+  header.addEventListener("click", () => toggleGroup(key));
+
+  userSoundsListEl.appendChild(header);
+}
+
+/**
+ * Рисует одну строку звука. Класс is-collapsed добавляется, если группа свёрнута.
+ */
+function renderSoundItem(rec, groupKey) {
+  const li = document.createElement("li");
+  li.className = "sounds-list__item";
+  if (groupCollapsed[groupKey]) li.classList.add("is-collapsed");
+  li.dataset.soundId = rec.id;
+  li.dataset.groupItem = groupKey;
+
+  const btnPlay = document.createElement("button");
+  btnPlay.type = "button";
+  btnPlay.className = "sounds-list__btn";
+  btnPlay.setAttribute("aria-label", "Прослушать");
+  btnPlay.textContent = "▶";
+  if (currentlyPreviewingId === rec.id) {
+    btnPlay.classList.add("sounds-list__btn--playing");
+  }
+  btnPlay.addEventListener("click", () => previewSound(rec.id));
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "sounds-list__name";
+  nameEl.textContent = rec.name;
+  nameEl.title = rec.name;
+
+  const badge = document.createElement("span");
+  badge.className =
+    "sounds-list__badge" +
+    (rec.source === "user" ? " sounds-list__badge--user" : "");
+  badge.textContent = rec.source === "user" ? "мой" : "встроенный";
+
+  li.appendChild(btnPlay);
+  li.appendChild(nameEl);
+  li.appendChild(badge);
+
+  if (rec.source === "user") {
+    const btnDel = document.createElement("button");
+    btnDel.type = "button";
+    btnDel.className = "sounds-list__btn sounds-list__btn--delete";
+    btnDel.setAttribute("aria-label", "Удалить");
+    btnDel.textContent = "✕";
+    btnDel.addEventListener("click", () => deleteUserSound(rec.id, rec.name));
+    li.appendChild(btnDel);
+  }
+
+  return li;
+}
+
+/**
+ * Сворачивает/разворачивает группу — без перерисовки всего списка,
+ * просто переключает классы у строк этой группы и атрибут у заголовка.
+ */
+function toggleGroup(key) {
+  groupCollapsed[key] = !groupCollapsed[key];
+
+  const header = userSoundsListEl.querySelector(
+    `.sounds-list__group-header[data-group-header="${key}"]`
+  );
+  if (header) {
+    header.setAttribute("aria-expanded", String(!groupCollapsed[key]));
+  }
+
+  const items = userSoundsListEl.querySelectorAll(
+    `[data-group-item="${key}"]`
+  );
+  for (const el of items) {
+    el.classList.toggle("is-collapsed", groupCollapsed[key]);
+  }
+}
+
 
 function renderSingleSoundSelect(records) {
   // Запомним текущее значение, чтобы попробовать восстановить.
@@ -591,14 +687,22 @@ function renderSingleSoundSelect(records) {
     records.length === 0 ? "— нет доступных звуков —" : "— выберите звук —";
   selectSingleSound.appendChild(placeholder);
 
-  // optgroup'ы — чтобы визуально отделить встроенные от своих.
-  const builtin = records.filter((r) => r.source === "builtin");
-  const user = records.filter((r) => r.source === "user");
+  // Делим на группы. Внутри каждой — отдельная сортировка:
+  //   user    — свежие сверху;
+  //   builtin — естественной сортировкой по имени.
+  // Порядок optgroup'ов: сначала «Мои», потом «Встроенные»
+  // (зеркалит список звуков ниже).
+  const user = records
+    .filter((r) => r.source === "user")
+    .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  const builtin = records
+    .filter((r) => r.source === "builtin")
+    .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
 
-  if (builtin.length > 0) {
+  if (user.length > 0) {
     const og = document.createElement("optgroup");
-    og.label = "Встроенные";
-    for (const r of builtin) {
+    og.label = "Мои";
+    for (const r of user) {
       const opt = document.createElement("option");
       opt.value = r.id;
       opt.textContent = r.name;
@@ -607,10 +711,10 @@ function renderSingleSoundSelect(records) {
     selectSingleSound.appendChild(og);
   }
 
-  if (user.length > 0) {
+  if (builtin.length > 0) {
     const og = document.createElement("optgroup");
-    og.label = "Мои";
-    for (const r of user) {
+    og.label = "Встроенные";
+    for (const r of builtin) {
       const opt = document.createElement("option");
       opt.value = r.id;
       opt.textContent = r.name;
@@ -626,22 +730,24 @@ function renderSingleSoundSelect(records) {
   } else {
     selectSingleSound.value = "";
     if (wanted && !stillExists) {
-      // Звук удалён — приведём настройку в порядок.
       settings.singleSoundId = "";
       saveSettings();
     }
   }
 }
 
+
 async function refreshSoundsUi() {
   try {
-    const records = sortSoundsForList(await GoRandDB.getAllSounds());
-    renderSoundsList(records);
-    renderSingleSoundSelect(records);
+    const grouped = sortSoundsForList(await GoRandDB.getAllSounds());
+    renderSoundsList(grouped);
+    // Для селекта нам по-прежнему удобнее плоский массив:
+    renderSingleSoundSelect([...grouped.user, ...grouped.builtin]);
   } catch (err) {
     console.error("[ui] не удалось обновить список звуков:", err);
   }
 }
+
 
 // ============================================================
 //  ДЕЙСТВИЯ В СПИСКЕ: PREVIEW / DELETE
