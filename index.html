@@ -161,16 +161,29 @@
 
         <p class="settings-note">
           Загруженные звуки сохраняются на вашем устройстве и доступны без интернета.
+          Поддерживаются файлы mp3 и wav, размер до 2 МБ каждый.
         </p>
 
-        <button id="btn-upload-sounds" class="btn-secondary" type="button" disabled>
-          Загрузить звуки (Этап 4)
+        <button id="btn-upload-sounds" class="btn-secondary" type="button">
+          Загрузить звуки
         </button>
+
+        <!-- Скрытый input: кликается программно из кнопки выше.
+             multiple — можно выбрать сразу несколько файлов.
+             accept — подсказка системе, какие файлы предлагать. -->
+        <input
+          id="input-upload-sounds"
+          class="hidden-file-input"
+          type="file"
+          accept="audio/mpeg,audio/mp3,audio/wav,audio/wave,audio/x-wav,.mp3,.wav"
+          multiple
+        />
 
         <ul id="user-sounds-list" class="sounds-list">
           <li class="sounds-list__empty">Пока ничего не загружено</li>
         </ul>
       </section>
+
 
     </main>
   </section>

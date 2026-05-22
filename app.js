@@ -1,5 +1,5 @@
 // === GoRand — основная логика приложения ===
-// Этап 3: логика серии (старт/стоп, звук, счётчик, таймер).
+// Этап 4 шаг 4: загрузка пользовательских звуков в IndexedDB.
 
 console.log("GoRand: app.js загружен");
 
@@ -200,6 +200,29 @@ btnOpenSettings.addEventListener("click", () => {
 btnCloseSettings.addEventListener("click", () => showScreen("main"));
 
 // ============================================================
+//  ТОСТ — короткое всплывающее сообщение
+// ============================================================
+
+let toastEl = null;
+let toastHideTimeoutId = null;
+
+function showToast(message, durationMs = 2500) {
+  if (!toastEl) {
+    toastEl = document.createElement("div");
+    toastEl.className = "toast";
+    document.body.appendChild(toastEl);
+  }
+  toastEl.textContent = message;
+  // Сначала добавим в DOM, потом в следующем кадре — visible-класс. Так браузер
+  // успеет применить начальное opacity:0, и переход к 1 будет плавным.
+  requestAnimationFrame(() => toastEl.classList.add("toast--visible"));
+  if (toastHideTimeoutId) clearTimeout(toastHideTimeoutId);
+  toastHideTimeoutId = setTimeout(() => {
+    toastEl.classList.remove("toast--visible");
+  }, durationMs);
+}
+
+// ============================================================
 //  ЗВУК (Web Audio API)
 // ============================================================
 
@@ -249,22 +272,177 @@ function playBeep() {
 }
 
 // ============================================================
-//  ТАЙМЕР СЕРИИ
+//  ИНИЦИАЛИЗАЦИЯ ВСТРОЕННЫХ ЗВУКОВ
 // ============================================================
-// Показывает общее прошедшее время в формате MM:SS.s.
-// Источник истины — performance.now() (монотонные миллисекунды от загрузки
-// страницы). setInterval отвечает только за частоту перерисовки.
 
-let timerStartedAt = 0;       // момент старта серии (performance.now()), мс
-let timerIntervalId = null;   // id setInterval для перерисовки
+const BUILTIN_MANIFEST_URL = "sounds/index.json";
+
+async function initBuiltinSounds() {
+  try {
+    const existing = await GoRandDB.getSoundsBySource("builtin");
+    if (existing.length > 0) {
+      console.log(`[builtin] уже загружено ${existing.length} встроенных звуков, пропускаем фетч`);
+      return;
+    }
+
+    console.log("[builtin] встроенных звуков нет — загружаем из манифеста");
+    const manifestResponse = await fetch(BUILTIN_MANIFEST_URL, { cache: "no-cache" });
+    if (!manifestResponse.ok) {
+      throw new Error(`Манифест не получен: HTTP ${manifestResponse.status}`);
+    }
+    const manifest = await manifestResponse.json();
+
+    if (!manifest || !Array.isArray(manifest.sounds)) {
+      throw new Error("Манифест имеет некорректный формат (нет массива sounds)");
+    }
+
+    console.log(`[builtin] в манифесте ${manifest.sounds.length} звуков, начинаем скачивание`);
+
+    const CONCURRENCY = 6;
+    let cursor = 0;
+    let downloaded = 0;
+    let failed = 0;
+
+    async function worker() {
+      while (cursor < manifest.sounds.length) {
+        const idx = cursor++;
+        const entry = manifest.sounds[idx];
+        try {
+          const fileUrl = `sounds/${entry.file}`;
+          const fileResp = await fetch(fileUrl, { cache: "no-cache" });
+          if (!fileResp.ok) {
+            throw new Error(`HTTP ${fileResp.status}`);
+          }
+          const blob = await fileResp.blob();
+          await GoRandDB.putSound({
+            id: entry.id,
+            name: entry.name,
+            source: "builtin",
+            blob,
+            addedAt: Date.now(),
+          });
+          downloaded++;
+        } catch (err) {
+          failed++;
+          console.warn(`[builtin] не удалось загрузить ${entry.file}:`, err);
+        }
+      }
+    }
+
+    const workers = [];
+    for (let i = 0; i < CONCURRENCY; i++) workers.push(worker());
+    await Promise.all(workers);
+
+    console.log(`[builtin] готово: загружено ${downloaded}, ошибок ${failed}`);
+  } catch (err) {
+    console.error("[builtin] инициализация провалилась:", err);
+  }
+}
+
+// ============================================================
+//  ПОЛЬЗОВАТЕЛЬСКАЯ ЗАГРУЗКА ЗВУКОВ
+// ============================================================
+
+const btnUploadSounds = document.getElementById("btn-upload-sounds");
+const inputUploadSounds = document.getElementById("input-upload-sounds");
+
+const MAX_USER_FILE_SIZE = 2 * 1024 * 1024; // 2 МБ на файл
+const ALLOWED_MIME = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/wave", "audio/x-wav"];
+const ALLOWED_EXT = [".mp3", ".wav"];
+
+function isAllowedAudioFile(file) {
+  // Некоторые мобильные браузеры подсовывают пустой MIME или экзотический —
+  // поэтому проверяем И по MIME, И по расширению, и принимаем, если хоть один совпал.
+  const name = (file.name || "").toLowerCase();
+  const extOk = ALLOWED_EXT.some((ext) => name.endsWith(ext));
+  const mimeOk = file.type && ALLOWED_MIME.includes(file.type.toLowerCase());
+  return extOk || mimeOk;
+}
 
 /**
- * Превращает миллисекунды в строку "MM:SS.s".
- * Math.floor отбрасывает дробную часть, padStart дополняет нулями слева,
- * чтобы цифры не "прыгали" (всегда 2 знака на минуты, 2 на секунды).
+ * Генерит уникальный id вида "user-<timestamp>-<random>".
+ * Префикс user- — чтобы случайно не пересечься с builtin-id.
  */
+function makeUserSoundId() {
+  return `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Имя файла → красивое отображаемое имя.
+ * "Crazy Guy GO!.mp3" → "Crazy Guy GO!"
+ */
+function fileNameToDisplay(name) {
+  return name.replace(/\.(mp3|wav)$/i, "").trim() || "Без названия";
+}
+
+// Кнопка просто кликает по скрытому input — стандартный приём.
+btnUploadSounds.addEventListener("click", () => {
+  inputUploadSounds.click();
+});
+
+inputUploadSounds.addEventListener("change", async (event) => {
+  const files = Array.from(event.target.files || []);
+  // Сразу сбросим значение input'а, иначе если пользователь повторно выберет
+  // тот же файл — событие change не сработает (значение не изменилось).
+  event.target.value = "";
+
+  if (files.length === 0) return;
+
+  console.log(`[upload] выбрано ${files.length} файл(ов)`);
+
+  let added = 0;
+  let skippedType = 0;
+  let skippedSize = 0;
+  let failed = 0;
+
+  for (const file of files) {
+    if (!isAllowedAudioFile(file)) {
+      skippedType++;
+      console.warn(`[upload] не аудио: ${file.name} (type="${file.type}")`);
+      continue;
+    }
+    if (file.size > MAX_USER_FILE_SIZE) {
+      skippedSize++;
+      console.warn(`[upload] слишком большой: ${file.name} (${file.size} байт)`);
+      continue;
+    }
+
+    try {
+      const id = makeUserSoundId();
+      // File сам является Blob'ом, можно класть напрямую.
+      await GoRandDB.putSound({
+        id,
+        name: fileNameToDisplay(file.name),
+        source: "user",
+        blob: file,
+        addedAt: Date.now(),
+      });
+      added++;
+      console.log(`[upload] сохранён: ${file.name} → ${id}`);
+    } catch (err) {
+      failed++;
+      console.error(`[upload] ошибка сохранения ${file.name}:`, err);
+    }
+  }
+
+  // Соберём итоговое сообщение для тоста.
+  const parts = [];
+  if (added > 0) parts.push(`добавлено: ${added}`);
+  if (skippedType > 0) parts.push(`не аудио: ${skippedType}`);
+  if (skippedSize > 0) parts.push(`>2 МБ: ${skippedSize}`);
+  if (failed > 0) parts.push(`ошибок: ${failed}`);
+  showToast(parts.join(", ") || "Ничего не добавлено");
+});
+
+// ============================================================
+//  ТАЙМЕР СЕРИИ
+// ============================================================
+
+let timerStartedAt = 0;
+let timerIntervalId = null;
+
 function formatTime(ms) {
-  const totalTenths = Math.floor(ms / 100);          // десятые доли секунды всего
+  const totalTenths = Math.floor(ms / 100);
   const tenths = totalTenths % 10;
   const totalSeconds = Math.floor(totalTenths / 10);
   const seconds = totalSeconds % 60;
@@ -281,8 +459,7 @@ function renderTimer() {
 
 function startTimer() {
   timerStartedAt = performance.now();
-  renderTimer();                       // сразу показать 00:00.0
-  // 100 мс — частота перерисовки. Это НЕ источник времени, лишь обновление UI.
+  renderTimer();
   timerIntervalId = setInterval(renderTimer, 100);
 }
 
@@ -291,12 +468,10 @@ function stopTimer() {
     clearInterval(timerIntervalId);
     timerIntervalId = null;
   }
-  // Финальную перерисовку делаем — чтобы зафиксировать точное время остановки.
   renderTimer();
 }
 
 function resetTimer() {
-  // Используется при нажатии "Стоп" вручную — сбрасываем на 00:00.0.
   if (timerIntervalId !== null) {
     clearInterval(timerIntervalId);
     timerIntervalId = null;
@@ -305,7 +480,7 @@ function resetTimer() {
 }
 
 // ============================================================
-//  ЛОГИКА СЕРИИ (Этап 3)
+//  ЛОГИКА СЕРИИ
 // ============================================================
 
 let isRunning = false;
@@ -313,18 +488,6 @@ let nextBeepTimeoutId = null;
 let currentStart = 0;
 
 const btnStart = document.getElementById("btn-start");
-
-function renderStartButton() {
-  if (isRunning) {
-    btnStart.textContent = "Стоп";
-    btnStart.classList.remove("big-btn--start");
-    btnStart.classList.add("big-btn--stop");
-  } else {
-    btnStart.textContent = "Старт";
-    btnStart.classList.remove("big-btn--stop");
-    btnStart.classList.add("big-btn--start");
-  }
-}
 
 function randomInterval() {
   const min = settings.intervalMin;
@@ -336,17 +499,11 @@ function randomInterval() {
 function scheduleNextBeep() {
   const delaySec = randomInterval();
   const delayMs = Math.round(delaySec * 1000);
-  console.log(`⏱ следующий бип через ${delaySec.toFixed(1)} с`);
-
   nextBeepTimeoutId = setTimeout(() => {
-    nextBeepTimeoutId = null;
     if (!isRunning) return;
-
     playBeep();
-    currentStart += 1;
+    currentStart++;
     counterValue.textContent = `${currentStart} / ${settings.startsCount}`;
-    console.log(`🔔 старт ${currentStart} / ${settings.startsCount}`);
-
     if (currentStart >= settings.startsCount) {
       finishSeries();
     } else {
@@ -356,49 +513,44 @@ function scheduleNextBeep() {
 }
 
 function startSeries() {
-  if (isRunning) return;
-  console.log("▶ Старт серии. Настройки:", settings);
-
   ensureAudioContext();
-
   isRunning = true;
   currentStart = 0;
-  counterLabel.textContent = "Серия идёт";
   counterValue.textContent = `0 / ${settings.startsCount}`;
-  renderStartButton();
-
+  counterLabel.textContent = "Серия идёт";
+  btnStart.textContent = "Стоп";
+  btnStart.classList.remove("big-btn--start");
+  btnStart.classList.add("big-btn--stop");
   startTimer();
   scheduleNextBeep();
 }
 
 function stopSeries() {
-  if (!isRunning) return;
-  console.log("■ Стоп серии (вручную)");
-
   isRunning = false;
-
   if (nextBeepTimeoutId !== null) {
     clearTimeout(nextBeepTimeoutId);
     nextBeepTimeoutId = null;
   }
-
-  resetTimer();   // сбрасываем на 00:00.0 — серия не считается выполненной
-
+  resetTimer();
   currentStart = 0;
+  counterValue.textContent = `0 / ${settings.startsCount}`;
   counterLabel.textContent = "Готов к старту";
-  renderStartButton();
-  updateMainCounter();
+  btnStart.textContent = "Старт";
+  btnStart.classList.remove("big-btn--stop");
+  btnStart.classList.add("big-btn--start");
 }
 
 function finishSeries() {
-  console.log("✅ Серия завершена");
   isRunning = false;
-  nextBeepTimeoutId = null;
-
-  stopTimer();    // оставляем финальное время на экране — пусть видно "за сколько прошёл"
-
+  if (nextBeepTimeoutId !== null) {
+    clearTimeout(nextBeepTimeoutId);
+    nextBeepTimeoutId = null;
+  }
+  stopTimer();
   counterLabel.textContent = "Серия завершена";
-  renderStartButton();
+  btnStart.textContent = "Старт";
+  btnStart.classList.remove("big-btn--stop");
+  btnStart.classList.add("big-btn--start");
 }
 
 btnStart.addEventListener("click", () => {
@@ -410,9 +562,13 @@ btnStart.addEventListener("click", () => {
 });
 
 // ============================================================
-//  ИНИЦИАЛИЗАЦИЯ
+//  СТАРТ ПРИЛОЖЕНИЯ
 // ============================================================
 
-loadSettings();
-renderSettings();
-renderStartButton();
+async function bootstrap() {
+  loadSettings();
+  renderSettings();
+  initBuiltinSounds();
+}
+
+bootstrap();

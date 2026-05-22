@@ -434,3 +434,85 @@ body {
   padding: 16px 0;
   font-style: italic;
 }
+
+/* ============================================================
+   Загрузка пользовательских звуков (Этап 4 шаг 4)
+   ============================================================ */
+
+/* Скрытый <input type="file"> — мы кликаем по нему программно из обычной кнопки.
+   visibility:hidden + position:absolute вместо display:none — потому что
+   некоторые мобильные браузеры игнорируют клик по display:none-элементу. */
+.hidden-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Серая «вторичная» кнопка (Загрузить звуки и подобные). */
+.btn-secondary {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 1rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-secondary:hover,
+.btn-secondary:active {
+  background: var(--border);
+}
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Текстовая подсказка под/над контролом (например, «загруженные звуки сохраняются…»). */
+.settings-note {
+  font-size: 0.85rem;
+  color: var(--subtle);
+  padding: 8px 0 12px;
+  line-height: 1.4;
+}
+
+/* Список звуков (пока пустой плейсхолдер, наполним на Шаге 5). */
+.sounds-list {
+  list-style: none;
+  margin-top: 12px;
+}
+.sounds-list__empty {
+  font-size: 0.9rem;
+  color: var(--subtle);
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* Тост — короткое всплывающее сообщение внизу экрана. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 100;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  max-width: calc(100% - 32px);
+  text-align: center;
+}
+.toast.toast--visible {
+  opacity: 1;
+}
