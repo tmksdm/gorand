@@ -516,3 +516,94 @@ body {
 .toast.toast--visible {
   opacity: 1;
 }
+
+/* ============================================================
+   Элементы строки списка звуков (Этап 4 шаг 5)
+   ============================================================ */
+
+.sounds-list__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  min-height: 52px;
+}
+.sounds-list__item:first-child {
+  border-top: none;
+}
+
+/* Имя файла — занимает всё свободное место, длинное — обрезается с многоточием. */
+.sounds-list__name {
+  flex: 1;
+  min-width: 0;                /* критично для работы text-overflow внутри flex */
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Маленький бейдж справа от имени — «встроенный» / «мой». */
+.sounds-list__badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--subtle);
+  flex-shrink: 0;
+}
+.sounds-list__badge--user {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--accent-dark);
+}
+
+/* Кружок-кнопка ▶ / ✕ */
+.sounds-list__btn {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  padding: 0;
+}
+.sounds-list__btn:hover,
+.sounds-list__btn:active {
+  background: var(--border);
+}
+.sounds-list__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* «Прослушать» во время проигрывания — подсвечен зелёным. */
+.sounds-list__btn--playing {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.sounds-list__btn--playing:hover,
+.sounds-list__btn--playing:active {
+  background: var(--accent-dark);
+}
+
+/* «Удалить» — красная окантовка при наведении (только на десктопе пригодится). */
+.sounds-list__btn--delete:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Группа-секция со списком: ставим список с небольшим отступом сверху. */
+.sounds-list {
+  margin-top: 16px;
+}

@@ -1,5 +1,5 @@
 // === GoRand — основная логика приложения ===
-// Этап 4 шаг 4: загрузка пользовательских звуков в IndexedDB.
+// Этап 4 шаг 5: список звуков (прослушать / удалить), наполнение селекта.
 
 console.log("GoRand: app.js загружен");
 
@@ -75,11 +75,12 @@ function renderSettings() {
   inputStartsCount.value = settings.startsCount;
   toggleCountdown.checked = settings.countdownEnabled;
   selectSoundMode.value = settings.soundMode;
-  selectSingleSound.value = settings.singleSoundId;
   toggleVibration.checked = settings.vibrationEnabled;
 
   updateSingleSoundRowVisibility();
   updateMainCounter();
+  // selectSingleSound.value установится после refreshSoundsUi(),
+  // когда в select появятся опции.
 }
 
 function updateSingleSoundRowVisibility() {
@@ -213,8 +214,6 @@ function showToast(message, durationMs = 2500) {
     document.body.appendChild(toastEl);
   }
   toastEl.textContent = message;
-  // Сначала добавим в DOM, потом в следующем кадре — visible-класс. Так браузер
-  // успеет применить начальное opacity:0, и переход к 1 будет плавным.
   requestAnimationFrame(() => toastEl.classList.add("toast--visible"));
   if (toastHideTimeoutId) clearTimeout(toastHideTimeoutId);
   toastHideTimeoutId = setTimeout(() => {
@@ -269,6 +268,82 @@ function playBeep() {
 
   osc.start(now);
   osc.stop(now + duration);
+}
+
+// ============================================================
+//  ВОСПРОИЗВЕДЕНИЕ РЕАЛЬНОГО ЗВУКА ИЗ INDEXEDDB
+// ============================================================
+// Кеш декодированных AudioBuffer'ов по id записи. decodeAudioData стоит
+// заметных миллисекунд — повторное проигрывание того же звука должно быть
+// мгновенным, поэтому держим результаты в памяти.
+
+const audioBufferCache = new Map();
+
+/**
+ * blobToArrayBuffer — стандартный мост: для decodeAudioData нужен ArrayBuffer,
+ * у нас в IndexedDB лежит Blob. На современных браузерах есть blob.arrayBuffer(),
+ * для древних — упадём в FileReader.
+ */
+function blobToArrayBuffer(blob) {
+  if (typeof blob.arrayBuffer === "function") return blob.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsArrayBuffer(blob);
+  });
+}
+
+/**
+ * Декодирует звук по id и возвращает AudioBuffer. Кеширует результат.
+ * Если запись не найдена в IndexedDB — возвращает null.
+ */
+async function getAudioBufferById(id) {
+  if (audioBufferCache.has(id)) return audioBufferCache.get(id);
+
+  const record = await GoRandDB.getSoundById(id);
+  if (!record || !record.blob) {
+    console.warn(`[audio] звук ${id} не найден в IndexedDB`);
+    return null;
+  }
+
+  const ctx = ensureAudioContext();
+  if (!ctx) return null;
+
+  try {
+    const arrayBuf = await blobToArrayBuffer(record.blob);
+    // decodeAudioData в Safari исторически принимает только callback-форму, но
+    // современные движки уже умеют Promise. Оборачиваем для совместимости.
+    const audioBuf = await new Promise((resolve, reject) => {
+      ctx.decodeAudioData(arrayBuf, resolve, reject);
+    });
+    audioBufferCache.set(id, audioBuf);
+    return audioBuf;
+  } catch (err) {
+    console.error(`[audio] не удалось декодировать ${id}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Проигрывает звук по id. Возвращает Promise, который резолвится, когда
+ * звук доиграл до конца (или сразу, если play не удалось).
+ */
+async function playSoundById(id) {
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+  const buf = await getAudioBufferById(id);
+  if (!buf) return;
+
+  const source = ctx.createBufferSource();
+  source.buffer = buf;
+  source.connect(ctx.destination);
+  source.start(ctx.currentTime);
+
+  // Дождёмся события onended — пригодится для UI «играет / не играет».
+  return new Promise((resolve) => {
+    source.onended = () => resolve();
+  });
 }
 
 // ============================================================
@@ -345,45 +420,33 @@ async function initBuiltinSounds() {
 
 const btnUploadSounds = document.getElementById("btn-upload-sounds");
 const inputUploadSounds = document.getElementById("input-upload-sounds");
+const userSoundsListEl = document.getElementById("user-sounds-list");
 
-const MAX_USER_FILE_SIZE = 2 * 1024 * 1024; // 2 МБ на файл
+const MAX_USER_FILE_SIZE = 2 * 1024 * 1024; // 2 МБ
 const ALLOWED_MIME = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/wave", "audio/x-wav"];
 const ALLOWED_EXT = [".mp3", ".wav"];
 
 function isAllowedAudioFile(file) {
-  // Некоторые мобильные браузеры подсовывают пустой MIME или экзотический —
-  // поэтому проверяем И по MIME, И по расширению, и принимаем, если хоть один совпал.
   const name = (file.name || "").toLowerCase();
   const extOk = ALLOWED_EXT.some((ext) => name.endsWith(ext));
   const mimeOk = file.type && ALLOWED_MIME.includes(file.type.toLowerCase());
   return extOk || mimeOk;
 }
 
-/**
- * Генерит уникальный id вида "user-<timestamp>-<random>".
- * Префикс user- — чтобы случайно не пересечься с builtin-id.
- */
 function makeUserSoundId() {
   return `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/**
- * Имя файла → красивое отображаемое имя.
- * "Crazy Guy GO!.mp3" → "Crazy Guy GO!"
- */
 function fileNameToDisplay(name) {
   return name.replace(/\.(mp3|wav)$/i, "").trim() || "Без названия";
 }
 
-// Кнопка просто кликает по скрытому input — стандартный приём.
 btnUploadSounds.addEventListener("click", () => {
   inputUploadSounds.click();
 });
 
 inputUploadSounds.addEventListener("change", async (event) => {
   const files = Array.from(event.target.files || []);
-  // Сразу сбросим значение input'а, иначе если пользователь повторно выберет
-  // тот же файл — событие change не сработает (значение не изменилось).
   event.target.value = "";
 
   if (files.length === 0) return;
@@ -409,7 +472,6 @@ inputUploadSounds.addEventListener("change", async (event) => {
 
     try {
       const id = makeUserSoundId();
-      // File сам является Blob'ом, можно класть напрямую.
       await GoRandDB.putSound({
         id,
         name: fileNameToDisplay(file.name),
@@ -425,14 +487,210 @@ inputUploadSounds.addEventListener("change", async (event) => {
     }
   }
 
-  // Соберём итоговое сообщение для тоста.
   const parts = [];
   if (added > 0) parts.push(`добавлено: ${added}`);
   if (skippedType > 0) parts.push(`не аудио: ${skippedType}`);
   if (skippedSize > 0) parts.push(`>2 МБ: ${skippedSize}`);
   if (failed > 0) parts.push(`ошибок: ${failed}`);
   showToast(parts.join(", ") || "Ничего не добавлено");
+
+  // Что-то могло добавиться — перерисуем список и селект.
+  await refreshSoundsUi();
 });
+
+// ============================================================
+//  РЕНДЕР СПИСКА ЗВУКОВ И СЕЛЕКТА «ВЫБРАННЫЙ ЗВУК»
+// ============================================================
+
+/**
+ * Сортирует записи: сначала builtin (по name естественной сортировкой),
+ * потом user (по addedAt: свежие сверху).
+ */
+function sortSoundsForList(records) {
+  const builtin = records
+    .filter((r) => r.source === "builtin")
+    .sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
+  const user = records
+    .filter((r) => r.source === "user")
+    .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  return [...builtin, ...user];
+}
+
+// Текущая «играющая» запись в списке — чтобы можно было визуально подсветить
+// кнопку ▶ и не запускать второй экземпляр одновременно.
+let currentlyPreviewingId = null;
+
+function renderSoundsList(records) {
+  userSoundsListEl.innerHTML = "";
+
+  if (records.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "sounds-list__empty";
+    empty.textContent = "Пока ничего не загружено";
+    userSoundsListEl.appendChild(empty);
+    return;
+  }
+
+  for (const rec of records) {
+    const li = document.createElement("li");
+    li.className = "sounds-list__item";
+    li.dataset.soundId = rec.id;
+
+    // ▶ Прослушать
+    const btnPlay = document.createElement("button");
+    btnPlay.type = "button";
+    btnPlay.className = "sounds-list__btn";
+    btnPlay.setAttribute("aria-label", "Прослушать");
+    btnPlay.textContent = "▶";
+    if (currentlyPreviewingId === rec.id) {
+      btnPlay.classList.add("sounds-list__btn--playing");
+    }
+    btnPlay.addEventListener("click", () => previewSound(rec.id));
+
+    // Имя
+    const nameEl = document.createElement("span");
+    nameEl.className = "sounds-list__name";
+    nameEl.textContent = rec.name;
+    nameEl.title = rec.name;
+
+    // Бейдж
+    const badge = document.createElement("span");
+    badge.className =
+      "sounds-list__badge" +
+      (rec.source === "user" ? " sounds-list__badge--user" : "");
+    badge.textContent = rec.source === "user" ? "мой" : "встроенный";
+
+    li.appendChild(btnPlay);
+    li.appendChild(nameEl);
+    li.appendChild(badge);
+
+    // ✕ Удалить — только для user
+    if (rec.source === "user") {
+      const btnDel = document.createElement("button");
+      btnDel.type = "button";
+      btnDel.className = "sounds-list__btn sounds-list__btn--delete";
+      btnDel.setAttribute("aria-label", "Удалить");
+      btnDel.textContent = "✕";
+      btnDel.addEventListener("click", () => deleteUserSound(rec.id, rec.name));
+      li.appendChild(btnDel);
+    }
+
+    userSoundsListEl.appendChild(li);
+  }
+}
+
+function renderSingleSoundSelect(records) {
+  // Запомним текущее значение, чтобы попробовать восстановить.
+  const wanted = settings.singleSoundId;
+
+  selectSingleSound.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent =
+    records.length === 0 ? "— нет доступных звуков —" : "— выберите звук —";
+  selectSingleSound.appendChild(placeholder);
+
+  // optgroup'ы — чтобы визуально отделить встроенные от своих.
+  const builtin = records.filter((r) => r.source === "builtin");
+  const user = records.filter((r) => r.source === "user");
+
+  if (builtin.length > 0) {
+    const og = document.createElement("optgroup");
+    og.label = "Встроенные";
+    for (const r of builtin) {
+      const opt = document.createElement("option");
+      opt.value = r.id;
+      opt.textContent = r.name;
+      og.appendChild(opt);
+    }
+    selectSingleSound.appendChild(og);
+  }
+
+  if (user.length > 0) {
+    const og = document.createElement("optgroup");
+    og.label = "Мои";
+    for (const r of user) {
+      const opt = document.createElement("option");
+      opt.value = r.id;
+      opt.textContent = r.name;
+      og.appendChild(opt);
+    }
+    selectSingleSound.appendChild(og);
+  }
+
+  // Восстанавливаем выбор. Если того звука уже нет (удалили) — сбрасываем.
+  const stillExists = records.some((r) => r.id === wanted);
+  if (wanted && stillExists) {
+    selectSingleSound.value = wanted;
+  } else {
+    selectSingleSound.value = "";
+    if (wanted && !stillExists) {
+      // Звук удалён — приведём настройку в порядок.
+      settings.singleSoundId = "";
+      saveSettings();
+    }
+  }
+}
+
+async function refreshSoundsUi() {
+  try {
+    const records = sortSoundsForList(await GoRandDB.getAllSounds());
+    renderSoundsList(records);
+    renderSingleSoundSelect(records);
+  } catch (err) {
+    console.error("[ui] не удалось обновить список звуков:", err);
+  }
+}
+
+// ============================================================
+//  ДЕЙСТВИЯ В СПИСКЕ: PREVIEW / DELETE
+// ============================================================
+
+async function previewSound(id) {
+  // Если уже что-то играет — просто ждём, пусть доиграет. Старт нового
+  // экземпляра во время старого даёт неприятный «двойной» эффект.
+  if (currentlyPreviewingId) return;
+
+  currentlyPreviewingId = id;
+  // Подсветим кнопку текущей записи.
+  const li = userSoundsListEl.querySelector(`[data-sound-id="${cssEscape(id)}"]`);
+  const btn = li ? li.querySelector(".sounds-list__btn") : null;
+  if (btn) btn.classList.add("sounds-list__btn--playing");
+
+  try {
+    await playSoundById(id);
+  } catch (err) {
+    console.error("[preview] ошибка проигрывания:", err);
+  } finally {
+    if (btn) btn.classList.remove("sounds-list__btn--playing");
+    currentlyPreviewingId = null;
+  }
+}
+
+/**
+ * CSS.escape есть не везде; даём простой fallback на случай старого браузера.
+ */
+function cssEscape(s) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(s);
+  }
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+async function deleteUserSound(id, name) {
+  const ok = window.confirm(`Удалить звук «${name}»?`);
+  if (!ok) return;
+  try {
+    await GoRandDB.deleteSound(id);
+    audioBufferCache.delete(id);
+    showToast("Удалено");
+    await refreshSoundsUi();
+  } catch (err) {
+    console.error("[delete] ошибка:", err);
+    showToast("Не удалось удалить");
+  }
+}
 
 // ============================================================
 //  ТАЙМЕР СЕРИИ
@@ -568,7 +826,10 @@ btnStart.addEventListener("click", () => {
 async function bootstrap() {
   loadSettings();
   renderSettings();
-  initBuiltinSounds();
+  // Дождёмся загрузки builtin'ов (если они грузятся первый раз) — иначе
+  // список и селект отрисуются пустыми, и потом надо будет их обновлять.
+  await initBuiltinSounds();
+  await refreshSoundsUi();
 }
 
 bootstrap();
