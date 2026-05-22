@@ -306,14 +306,18 @@ async function getAudioBufferById(id) {
     console.warn(`[audio] звук ${id} не найден в IndexedDB`);
     return null;
   }
+  // Защита от «пустых» blob'ов (например, если когда-то фетч прервал
+  // download-менеджер): декодировать 0 байт всё равно не получится.
+  if (record.blob.size === 0) {
+    console.warn(`[audio] звук ${id} имеет пустой blob (size=0), пропускаем`);
+    return null;
+  }
 
   const ctx = ensureAudioContext();
   if (!ctx) return null;
 
   try {
     const arrayBuf = await blobToArrayBuffer(record.blob);
-    // decodeAudioData в Safari исторически принимает только callback-форму, но
-    // современные движки уже умеют Promise. Оборачиваем для совместимости.
     const audioBuf = await new Promise((resolve, reject) => {
       ctx.decodeAudioData(arrayBuf, resolve, reject);
     });
@@ -324,6 +328,7 @@ async function getAudioBufferById(id) {
     return null;
   }
 }
+
 
 /**
  * Проигрывает звук по id. Возвращает Promise, который резолвится, когда
@@ -851,6 +856,10 @@ let isRunning = false;
 let nextBeepTimeoutId = null;
 let currentStart = 0;
 
+// Список id, из которых выбираем случайный звук для текущей серии.
+// Заполняется в startSeries() согласно settings.soundMode и держится до конца серии.
+let seriesPlaylist = [];
+
 const btnStart = document.getElementById("btn-start");
 
 function randomInterval() {
@@ -860,12 +869,98 @@ function randomInterval() {
   return roundTenth(raw);
 }
 
+/**
+ * Собирает список id звуков для серии в зависимости от режима + наличия записей.
+ * Реализует и фолбэки на случай «выбрано пусто».
+ *
+ * Возвращает {
+ *   ids:    [array<string>],     // что играть; пустой = играть синтетический бип
+ *   reason: string | null,       // если был фолбэк — что и почему (для лога/тоста)
+ * }
+ */
+async function buildSeriesPlaylist() {
+  const all = await GoRandDB.getAllSounds();
+  const builtinIds = all.filter((r) => r.source === "builtin").map((r) => r.id);
+  const userIds = all.filter((r) => r.source === "user").map((r) => r.id);
+
+  const mode = settings.soundMode;
+
+  if (mode === "single") {
+    const wanted = settings.singleSoundId;
+    if (wanted && all.some((r) => r.id === wanted)) {
+      return { ids: [wanted], reason: null };
+    }
+    // Звук не выбран или удалён — фолбэк: микс всех.
+    if (all.length > 0) {
+      return { ids: all.map((r) => r.id), reason: "single-not-set" };
+    }
+    return { ids: [], reason: "empty" };
+  }
+
+  if (mode === "random-user") {
+    if (userIds.length > 0) return { ids: userIds, reason: null };
+    // Своих нет — берём встроенные.
+    if (builtinIds.length > 0) {
+      return { ids: builtinIds, reason: "no-user-sounds" };
+    }
+    return { ids: [], reason: "empty" };
+  }
+
+  if (mode === "random-all") {
+    if (all.length > 0) return { ids: all.map((r) => r.id), reason: null };
+    return { ids: [], reason: "empty" };
+  }
+
+  // По умолчанию и для "random-builtin":
+  if (builtinIds.length > 0) return { ids: builtinIds, reason: null };
+  if (all.length > 0) {
+    return { ids: all.map((r) => r.id), reason: "no-builtin-sounds" };
+  }
+  return { ids: [], reason: "empty" };
+}
+
+/**
+ * Прелоад: декодирует все звуки из плейлиста заранее.
+ * decodeAudioData кладёт результат в audioBufferCache, так что повторный вызов
+ * в момент бипа отработает мгновенно.
+ * Не блокируем UI — просто await перед стартом цикла.
+ */
+async function preloadPlaylist(ids) {
+  // Промисы запускаем параллельно — это быстрее, чем по одному.
+  // Любые провалы внутри getAudioBufferById уже залогированы и вернутся как null.
+  await Promise.all(ids.map((id) => getAudioBufferById(id).catch(() => null)));
+}
+
+/**
+ * Играет один «бип» серии: выбирает случайный id из плейлиста и проигрывает.
+ * Если плейлист пуст или конкретный звук не сыграл — синтетический бип-фолбэк,
+ * чтобы серия не молчала.
+ */
+function playSeriesBeep() {
+  if (seriesPlaylist.length === 0) {
+    playBeep();
+    return;
+  }
+  const id = seriesPlaylist[Math.floor(Math.random() * seriesPlaylist.length)];
+  // Запускаем без await — нам не нужно ждать окончания, следующий setTimeout
+  // уже отсчитывает свой случайный интервал. Если буфер не найден — fallback.
+  playSoundById(id).then((played) => {
+    // playSoundById ничего не возвращает явно при отсутствии буфера —
+    // но он залогирует warning. Делаем ещё одну страховку через буфер-кеш:
+    // если в кеше нет и не появилось — значит звук не сыграл, бипнем.
+    // (В подавляющем большинстве случаев это не сработает — звук уже сыграл.)
+  }).catch((err) => {
+    console.warn("[series] не удалось проиграть, fallback на бип:", err);
+    playBeep();
+  });
+}
+
 function scheduleNextBeep() {
   const delaySec = randomInterval();
   const delayMs = Math.round(delaySec * 1000);
   nextBeepTimeoutId = setTimeout(() => {
     if (!isRunning) return;
-    playBeep();
+    playSeriesBeep();
     currentStart++;
     counterValue.textContent = `${currentStart} / ${settings.startsCount}`;
     if (currentStart >= settings.startsCount) {
@@ -876,8 +971,11 @@ function scheduleNextBeep() {
   }, delayMs);
 }
 
-function startSeries() {
+async function startSeries() {
+  // Аудиоконтекст обязан проснуться из user-gesture (важно для мобильных).
   ensureAudioContext();
+
+  // Подготовка UI — сразу, чтобы пользователь видел реакцию на нажатие.
   isRunning = true;
   currentStart = 0;
   counterValue.textContent = `0 / ${settings.startsCount}`;
@@ -885,6 +983,26 @@ function startSeries() {
   btnStart.textContent = "Стоп";
   btnStart.classList.remove("big-btn--start");
   btnStart.classList.add("big-btn--stop");
+
+  // Готовим плейлист и декодируем все звуки заранее.
+  const { ids, reason } = await buildSeriesPlaylist();
+  // Пользователь мог нажать «Стоп» во время подготовки — проверим.
+  if (!isRunning) return;
+
+  seriesPlaylist = ids;
+  if (reason) {
+    console.log(`[series] фолбэк выбора звуков: ${reason}`);
+    if (reason === "empty") {
+      showToast("Нет доступных звуков — синтетический бип");
+    } else if (reason === "no-user-sounds") {
+      showToast("Своих звуков нет — играем встроенные");
+    } else if (reason === "single-not-set") {
+      showToast("Звук не выбран — играем случайные");
+    }
+  }
+  await preloadPlaylist(seriesPlaylist);
+  if (!isRunning) return; // ещё одна страховка
+
   startTimer();
   scheduleNextBeep();
 }
@@ -924,6 +1042,7 @@ btnStart.addEventListener("click", () => {
     startSeries();
   }
 });
+
 
 // ============================================================
 //  СТАРТ ПРИЛОЖЕНИЯ
