@@ -427,23 +427,45 @@ const btnUploadSounds = document.getElementById("btn-upload-sounds");
 const inputUploadSounds = document.getElementById("input-upload-sounds");
 const userSoundsListEl = document.getElementById("user-sounds-list");
 
-const MAX_USER_FILE_SIZE = 2 * 1024 * 1024; // 2 МБ
-const ALLOWED_MIME = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/wave", "audio/x-wav"];
-const ALLOWED_EXT = [".mp3", ".wav"];
+const MAX_USER_FILE_SIZE = 2 * 1024 * 1024; // 2 МБ на файл
 
-function isAllowedAudioFile(file) {
-  const name = (file.name || "").toLowerCase();
-  const extOk = ALLOWED_EXT.some((ext) => name.endsWith(ext));
-  const mimeOk = file.type && ALLOWED_MIME.includes(file.type.toLowerCase());
-  return extOk || mimeOk;
+/**
+ * Проверяет, что файл — это реально декодируемое аудио, прогоняя его через
+ * Web Audio API. Возвращает Promise<boolean>. Это надёжнее проверки по MIME
+ * или расширению: разные телефонные диктофоны пишут в aac/m4a/amr/ogg/3gp,
+ * и заранее весь список не угадать. Если decodeAudioData справился — точно
+ * сможем и проиграть.
+ *
+ * Декодирование короткого голосового файла занимает миллисекунды, пользователь
+ * этого не заметит.
+ */
+async function canDecodeAudioFile(file) {
+  const ctx = ensureAudioContext();
+  if (!ctx) return false;
+  try {
+    const arrayBuf = await blobToArrayBuffer(file);
+    if (!arrayBuf || arrayBuf.byteLength === 0) return false;
+    await new Promise((resolve, reject) => {
+      // Передаём СЛАЙС ArrayBuffer'а через slice(0) — decodeAudioData
+      // в некоторых движках «съедает» исходный буфер, делая его непригодным
+      // для повторного использования. Копия безопаснее.
+      ctx.decodeAudioData(arrayBuf.slice(0), resolve, reject);
+    });
+    return true;
+  } catch (err) {
+    console.warn(`[upload] не декодируется: ${file.name}`, err);
+    return false;
+  }
 }
+
 
 function makeUserSoundId() {
   return `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function fileNameToDisplay(name) {
-  return name.replace(/\.(mp3|wav)$/i, "").trim() || "Без названия";
+  // Срезаем последнее «.расширение» (что угодно после последней точки).
+  return name.replace(/\.[^.\\/]+$/i, "").trim() || "Без названия";
 }
 
 btnUploadSounds.addEventListener("click", () => {
@@ -452,26 +474,37 @@ btnUploadSounds.addEventListener("click", () => {
 
 inputUploadSounds.addEventListener("change", async (event) => {
   const files = Array.from(event.target.files || []);
+  // Сразу сбросим значение input'а, чтобы повторный выбор того же файла
+  // снова срабатывал.
   event.target.value = "";
 
   if (files.length === 0) return;
 
   console.log(`[upload] выбрано ${files.length} файл(ов)`);
 
+  // Если выбрано много файлов — покажем «обрабатываю», чтобы пользователь
+  // не подумал, что приложение зависло (декодирование 20 файлов суммарно
+  // может занять секунду-две).
+  if (files.length > 3) {
+    showToast(`Обработка ${files.length} файлов…`, 60000);
+  }
+
   let added = 0;
-  let skippedType = 0;
   let skippedSize = 0;
+  let skippedFormat = 0;
   let failed = 0;
 
   for (const file of files) {
-    if (!isAllowedAudioFile(file)) {
-      skippedType++;
-      console.warn(`[upload] не аудио: ${file.name} (type="${file.type}")`);
-      continue;
-    }
     if (file.size > MAX_USER_FILE_SIZE) {
       skippedSize++;
       console.warn(`[upload] слишком большой: ${file.name} (${file.size} байт)`);
+      continue;
+    }
+
+    // Главная проверка: может ли браузер реально это проиграть?
+    const decodable = await canDecodeAudioFile(file);
+    if (!decodable) {
+      skippedFormat++;
       continue;
     }
 
@@ -494,14 +527,14 @@ inputUploadSounds.addEventListener("change", async (event) => {
 
   const parts = [];
   if (added > 0) parts.push(`добавлено: ${added}`);
-  if (skippedType > 0) parts.push(`не аудио: ${skippedType}`);
+  if (skippedFormat > 0) parts.push(`не поддерживается: ${skippedFormat}`);
   if (skippedSize > 0) parts.push(`>2 МБ: ${skippedSize}`);
   if (failed > 0) parts.push(`ошибок: ${failed}`);
   showToast(parts.join(", ") || "Ничего не добавлено");
 
-  // Что-то могло добавиться — перерисуем список и селект.
   await refreshSoundsUi();
 });
+
 
 // ============================================================
 //  РЕНДЕР СПИСКА ЗВУКОВ И СЕЛЕКТА «ВЫБРАННЫЙ ЗВУК»
