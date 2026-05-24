@@ -1101,17 +1101,12 @@ async function preloadPlaylist(ids) {
 function playSeriesBeep() {
   if (seriesPlaylist.length === 0) {
     playBeep();
-    return;
+    return Promise.resolve();
   }
   const id = seriesPlaylist[Math.floor(Math.random() * seriesPlaylist.length)];
-  // Запускаем без await — нам не нужно ждать окончания, следующий setTimeout
-  // уже отсчитывает свой случайный интервал. Если буфер не найден — fallback.
-  playSoundById(id).then((played) => {
-    // playSoundById ничего не возвращает явно при отсутствии буфера —
-    // но он залогирует warning. Делаем ещё одну страховку через буфер-кеш:
-    // если в кеше нет и не появилось — значит звук не сыграл, бипнем.
-    // (В подавляющем большинстве случаев это не сработает — звук уже сыграл.)
-  }).catch((err) => {
+  // Возвращаем Promise — он резолвится когда звук доиграл до конца (onended).
+  // Это нужно для последнего старта: finishSeries() вызывается только после.
+  return playSoundById(id).catch((err) => {
     console.warn("[series] не удалось проиграть, fallback на бип:", err);
     playBeep();
   });
@@ -1120,19 +1115,25 @@ function playSeriesBeep() {
 function scheduleNextBeep() {
   const delaySec = randomInterval();
   const delayMs = Math.round(delaySec * 1000);
-  nextBeepTimeoutId = setTimeout(() => {
+  nextBeepTimeoutId = setTimeout(async () => {
     if (!isRunning) return;
-    playSeriesBeep();
+
     // Вибрация — только если включена в настройках.
     // navigator.vibrate не работает на iOS — это нормально, вызов просто игнорируется.
     if (settings.vibrationEnabled && navigator.vibrate) {
       navigator.vibrate(65);
     }
+
     currentStart++;
     counterValue.textContent = `${currentStart} / ${settings.startsCount}`;
+
     if (currentStart >= settings.startsCount) {
-      finishSeries();
+      // Последний старт: ждём, пока звук доиграет до конца — и только потом
+      // переключаем кнопку в зелёный и показываем «Серия завершена».
+      await playSeriesBeep();
+      if (isRunning) finishSeries(); // isRunning мог стать false если нажали «Стоп»
     } else {
+      playSeriesBeep(); // не последний — fire-and-forget, не ждём
       scheduleNextBeep();
     }
   }, delayMs);
@@ -1141,6 +1142,11 @@ function scheduleNextBeep() {
 async function startSeries() {
   // Аудиоконтекст обязан проснуться из user-gesture (важно для мобильных).
   ensureAudioContext();
+
+  // Прокачиваем разрешение на вибрацию прямо в user-gesture контексте.
+  // Chrome на Android требует хотя бы один вызов vibrate() из жеста —
+  // тогда последующие вызовы из setTimeout тоже работают.
+  if (settings.vibrationEnabled && navigator.vibrate) navigator.vibrate(0);
 
   // Подготовка UI — сразу, чтобы пользователь видел реакцию на нажатие.
   isRunning = true;
