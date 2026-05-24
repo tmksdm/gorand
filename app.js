@@ -451,7 +451,7 @@ async function initBuiltinSounds() {
     }
 
     console.log("[builtin] встроенных звуков нет — загружаем из манифеста");
-    const manifestResponse = await fetch(BUILTIN_MANIFEST_URL, { cache: "no-cache" });
+    const manifestResponse = await fetch(BUILTIN_MANIFEST_URL);
     if (!manifestResponse.ok) {
       throw new Error(`Манифест не получен: HTTP ${manifestResponse.status}`);
     }
@@ -474,7 +474,7 @@ async function initBuiltinSounds() {
         const entry = manifest.sounds[idx];
         try {
           const fileUrl = `sounds/${entry.file}`;
-          const fileResp = await fetch(fileUrl, { cache: "no-cache" });
+          const fileResp = await fetch(fileUrl);
           if (!fileResp.ok) {
             throw new Error(`HTTP ${fileResp.status}`);
           }
@@ -974,6 +974,50 @@ let isRunning = false;
 let nextBeepTimeoutId = null;
 let currentStart = 0;
 
+// ============================================================
+//  WAKE LOCK — экран не засыпает во время серии
+// ============================================================
+
+let wakeLock = null;
+
+/**
+ * Запрашивает Wake Lock. Если API не поддерживается (старый браузер) —
+ * тихо пропускаем, серия работает и без него.
+ */
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    console.log("[wakeLock] API не поддерживается в этом браузере");
+    return;
+  }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    console.log("[wakeLock] получен");
+  } catch (err) {
+    // Может произойти если вкладка в фоне в момент запроса — не критично.
+    console.warn("[wakeLock] не удалось получить:", err.message);
+  }
+}
+
+/**
+ * Отпускает Wake Lock (если он есть).
+ */
+function releaseWakeLock() {
+  if (wakeLock) {
+    wakeLock.release().catch(() => {});
+    wakeLock = null;
+    console.log("[wakeLock] отпущен");
+  }
+}
+
+// Wake Lock автоматически снимается браузером, когда вкладка уходит в фон.
+// При возврате — переспрашиваем, если серия ещё идёт.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && isRunning) {
+    requestWakeLock();
+  }
+});
+
+
 // Список id, из которых выбираем случайный звук для текущей серии.
 // Заполняется в startSeries() согласно settings.soundMode и держится до конца серии.
 let seriesPlaylist = [];
@@ -1134,6 +1178,7 @@ async function startSeries() {
   }
 
   counterLabel.textContent = "Серия идёт";
+  await requestWakeLock();
   startTimer();
   scheduleNextBeep();
 }
@@ -1154,6 +1199,7 @@ function stopSeries() {
   // Если «Стоп» нажали во время обратного отсчёта — скрываем оверлей мгновенно,
   // не дожидаясь окончания текущего sleep() в runCountdown().
   document.getElementById("countdown-overlay").classList.add("hidden");
+  releaseWakeLock();
 }
 
 function finishSeries() {
@@ -1167,6 +1213,7 @@ function finishSeries() {
   btnStart.textContent = "Старт";
   btnStart.classList.remove("big-btn--stop");
   btnStart.classList.add("big-btn--start");
+  releaseWakeLock();
 }
 
 btnStart.addEventListener("click", () => {
