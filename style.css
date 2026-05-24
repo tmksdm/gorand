@@ -715,3 +715,18 @@ body {
   60%  { transform: scale(0.92); opacity: 1; }
   100% { transform: scale(1);   opacity: 1; }
 }
+
+/* ============================================================
+   АНИМАЦИИ (Этап 5, Шаг 5)
+   ============================================================ */
+
+/* Плавная пульсация подписи «Серия идёт» —
+   цвет мягко качается между приглушённым и акцентным. */
+@keyframes labelPulse {
+  0%, 100% { color: var(--subtle); }
+  50%       { color: var(--accent); }
+}
+
+.counter-label--active {
+  animation: labelPulse 2s ease-in-out infinite;
+}

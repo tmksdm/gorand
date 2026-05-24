@@ -1178,6 +1178,7 @@ async function startSeries() {
   }
 
   counterLabel.textContent = "Серия идёт";
+  counterLabel.classList.add("counter-label--active");
   await requestWakeLock();
   startTimer();
   scheduleNextBeep();
@@ -1193,6 +1194,7 @@ function stopSeries() {
   currentStart = 0;
   counterValue.textContent = `0 / ${settings.startsCount}`;
   counterLabel.textContent = "Готов к старту";
+  counterLabel.classList.remove("counter-label--active");
   btnStart.textContent = "Старт";
   btnStart.classList.remove("big-btn--stop");
   btnStart.classList.add("big-btn--start");
@@ -1210,6 +1212,7 @@ function finishSeries() {
   }
   stopTimer();
   counterLabel.textContent = "Серия завершена";
+  counterLabel.classList.remove("counter-label--active");
   btnStart.textContent = "Старт";
   btnStart.classList.remove("big-btn--stop");
   btnStart.classList.add("big-btn--start");
