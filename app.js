@@ -271,6 +271,91 @@ function playBeep() {
 }
 
 // ============================================================
+//  ВСПОМОГАТЕЛЬНЫЕ УТИЛИТЫ
+// ============================================================
+
+/**
+ * Простая пауза: await sleep(1000) — ждём 1 секунду.
+ * Используется в runCountdown().
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Короткий тихий бип для обратного отсчёта — отличается от основного:
+ * ниже по тону (440 Гц вместо 880) и короче (0.08 с).
+ * Так пользователь слышит разницу между «щелчком изготовки» и «Гоу!».
+ */
+function playCountdownBeep() {
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.value = 440;
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.18, now + 0.008);
+  gain.gain.linearRampToValueAtTime(0, now + 0.08);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.08);
+}
+
+/**
+ * Показывает оверлей с обратным отсчётом 3 → 2 → 1 → «Старт!».
+ * На каждой цифре — короткий бип и pop-анимация.
+ * Кнопка «Стоп» работает во время отсчёта (проверяем isRunning после каждого await).
+ *
+ * Возвращает:
+ *   true  — отсчёт дошёл до конца, можно запускать серию
+ *   false — пользователь нажал «Стоп» во время отсчёта
+ */
+async function runCountdown() {
+  const overlay = document.getElementById("countdown-overlay");
+  const digitEl = document.getElementById("countdown-digit");
+
+  // Показываем оверлей
+  overlay.classList.remove("hidden");
+  digitEl.classList.remove("countdown-go");
+
+  // Хелпер: показать цифру/текст с анимацией
+  function showDigit(text, isGo) {
+    digitEl.textContent = text;
+    digitEl.classList.toggle("countdown-go", !!isGo);
+    // Перезапускаем CSS-анимацию: снимаем класс → reflow → добавляем
+    digitEl.classList.remove("countdown-pop");
+    void digitEl.offsetWidth; // принудительный reflow
+    digitEl.classList.add("countdown-pop");
+  }
+
+  for (let i = 3; i >= 1; i--) {
+    if (!isRunning) {
+      overlay.classList.add("hidden");
+      return false;
+    }
+    showDigit(String(i), false);
+    playCountdownBeep();
+    await sleep(1000);
+  }
+
+  // Проверяем ещё раз — вдруг «Стоп» нажали в последнюю секунду
+  if (!isRunning) {
+    overlay.classList.add("hidden");
+    return false;
+  }
+
+  // «Старт!» — финальное слово
+  showDigit("Старт!", true);
+  await sleep(600);
+
+  overlay.classList.add("hidden");
+  return true;
+}
+
+// ============================================================
 //  ВОСПРОИЗВЕДЕНИЕ РЕАЛЬНОГО ЗВУКА ИЗ INDEXEDDB
 // ============================================================
 // Кеш декодированных AudioBuffer'ов по id записи. decodeAudioData стоит
@@ -994,6 +1079,11 @@ function scheduleNextBeep() {
   nextBeepTimeoutId = setTimeout(() => {
     if (!isRunning) return;
     playSeriesBeep();
+    // Вибрация — только если включена в настройках.
+    // navigator.vibrate не работает на iOS — это нормально, вызов просто игнорируется.
+    if (settings.vibrationEnabled && navigator.vibrate) {
+      navigator.vibrate(65);
+    }
     currentStart++;
     counterValue.textContent = `${currentStart} / ${settings.startsCount}`;
     if (currentStart >= settings.startsCount) {
@@ -1012,7 +1102,7 @@ async function startSeries() {
   isRunning = true;
   currentStart = 0;
   counterValue.textContent = `0 / ${settings.startsCount}`;
-  counterLabel.textContent = "Серия идёт";
+  counterLabel.textContent = settings.countdownEnabled ? "Изготовка…" : "Серия идёт";
   btnStart.textContent = "Стоп";
   btnStart.classList.remove("big-btn--start");
   btnStart.classList.add("big-btn--stop");
@@ -1036,6 +1126,14 @@ async function startSeries() {
   await preloadPlaylist(seriesPlaylist);
   if (!isRunning) return; // ещё одна страховка
 
+  // Обратный отсчёт (если включён в настройках).
+  // runCountdown() вернёт false, если пользователь нажал «Стоп» во время отсчёта.
+  if (settings.countdownEnabled) {
+    const completed = await runCountdown();
+    if (!completed || !isRunning) return;
+  }
+
+  counterLabel.textContent = "Серия идёт";
   startTimer();
   scheduleNextBeep();
 }
@@ -1053,6 +1151,9 @@ function stopSeries() {
   btnStart.textContent = "Старт";
   btnStart.classList.remove("big-btn--stop");
   btnStart.classList.add("big-btn--start");
+  // Если «Стоп» нажали во время обратного отсчёта — скрываем оверлей мгновенно,
+  // не дожидаясь окончания текущего sleep() в runCountdown().
+  document.getElementById("countdown-overlay").classList.add("hidden");
 }
 
 function finishSeries() {

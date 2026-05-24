@@ -664,3 +664,54 @@ body {
   color: var(--subtle);
   padding: 8px 0 12px;
 }
+
+/* ============================================================
+   ОБРАТНЫЙ ОТСЧЁТ (Этап 5, Шаг 1)
+   ============================================================ */
+
+/* Оверлей перекрывает весь #screen-main (position:fixed создаёт
+   containing block для position:absolute детей). */
+.countdown-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  z-index: 20;
+  /* Плавное появление и исчезновение */
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+/* Когда добавляем класс .hidden — плавно скрываем */
+.countdown-overlay.hidden {
+  display: none;
+}
+
+/* Большая цифра / текст «Старт!» */
+.countdown-digit {
+  font-size: 7rem;
+  font-weight: 900;
+  color: var(--accent);
+  line-height: 1;
+  /* Исходное состояние — без анимации */
+}
+
+/* Класс .countdown-pop добавляется JS-ом на каждую цифру —
+   перезапускает анимацию через reflow */
+.countdown-digit.countdown-pop {
+  animation: countdownPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* «Старт!» — зелёный, чуть меньше */
+.countdown-digit.countdown-go {
+  font-size: 3.5rem;
+  color: var(--accent);
+}
+
+@keyframes countdownPop {
+  0%   { transform: scale(1.5); opacity: 0; }
+  60%  { transform: scale(0.92); opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
+}

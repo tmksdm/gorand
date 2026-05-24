@@ -33,6 +33,12 @@
 
       <div class="timer">00:00.0</div>
     </main>
+
+    <!-- Оверлей обратного отсчёта.
+         Лежит внутри #screen-main и перекрывает его целиком, пока не получит класс .hidden. -->
+    <div id="countdown-overlay" class="countdown-overlay hidden" aria-live="assertive" aria-atomic="true">
+      <div id="countdown-digit" class="countdown-digit"></div>
+    </div>
   </section>
 
 
@@ -146,7 +152,7 @@
         <div class="settings-row">
           <label class="settings-row__label" for="toggle-vibration">
             Вибрация
-            <span class="settings-row__hint">короткая вибрация вместе со звуком</span>
+            <span class="settings-row__hint">короткая вибрация вместе со звуком · не работает на iPhone</span>
           </label>
           <label class="switch">
             <input id="toggle-vibration" type="checkbox" />
